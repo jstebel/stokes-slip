@@ -1,0 +1,14 @@
+CMakeCache.txt
+CMakeFiles
+geo
+Makefile
+stokes-slip
+stokes-slip-min
+
+*.aux
+*.dat
+*.kdev4
+*.log
+*.pdf
+*.tex
+*.vtk
