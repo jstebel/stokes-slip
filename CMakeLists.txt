@@ -3,6 +3,7 @@
 ##
 
 SET(DEAL_II_DIR "/home/stebel/dev/dealii-8.2.1/8.2.1")
+SET(CMAKE_BUILD_TYPE "Release")
 
 # Set the name of the project and target:
 SET(TARGET "stokes-slip")
@@ -37,3 +38,4 @@ DEAL_II_INVOKE_AUTOPILOT()
 
 LINK_DIRECTORIES(/usr/lib/x86_64-linux-gnu)
 TARGET_LINK_LIBRARIES(${TARGET} nlopt)
+TARGET_LINK_LIBRARIES(${TARGET} alglib)
