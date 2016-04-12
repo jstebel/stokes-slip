@@ -34,8 +34,9 @@ namespace Parameters {
         void parse_parameters(ParameterHandler &prm);
     };
 
-    struct RightHandSide {
+    struct BulkParameters {
         std::map<int, std::string> force;
+        bool sym_grad;
 
         static void declare_parameters(ParameterHandler &prm);
         void parse_parameters(ParameterHandler &prm);
@@ -72,10 +73,12 @@ namespace Parameters {
       Point<2> p2;
       double height;
       unsigned int np;
+      unsigned int maxit;
       std::string f_max;
       std::string f_min;
       double g_max;
       double h_max;
+      std::string logfile;
       
       static void declare_parameters(ParameterHandler &prm);
       void parse_parameters(ParameterHandler &prm);
@@ -85,7 +88,7 @@ namespace Parameters {
     struct AllParameters :
 //             public Materials,
             public BoundaryConditions,
-            public RightHandSide,
+            public BulkParameters,
             public CostFunction,
             public Numerics,
             public IO,

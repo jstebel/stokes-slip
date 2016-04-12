@@ -59,7 +59,7 @@ void AllParameters::declare_parameters(ParameterHandler &prm)
 {
 // 	Materials::declare_parameters(prm);
 	BoundaryConditions::declare_parameters(prm);
-	RightHandSide::declare_parameters(prm);
+	BulkParameters::declare_parameters(prm);
     CostFunction::declare_parameters(prm);
     Numerics::declare_parameters(prm);
 	IO::declare_parameters(prm);
@@ -70,7 +70,7 @@ void AllParameters::parse_parameters(ParameterHandler &prm)
 {
 // 	Materials::parse_parameters(prm);
 	BoundaryConditions::parse_parameters(prm);
-	RightHandSide::parse_parameters(prm);
+	BulkParameters::parse_parameters(prm);
     CostFunction::parse_parameters(prm);
     Numerics::parse_parameters(prm);
 	IO::parse_parameters(prm);
@@ -144,17 +144,19 @@ void BoundaryConditions::parse_parameters(ParameterHandler &prm)
 	prm.leave_subsection();
 }
 
-void RightHandSide::declare_parameters(ParameterHandler &prm)
+void BulkParameters::declare_parameters(ParameterHandler &prm)
 {
-	prm.enter_subsection("RightHandSide");
+	prm.enter_subsection("BulkParameters");
 		prm.declare_entry("Force", "", Patterns::Map(Patterns::Integer(), Patterns::Anything()));
+		prm.declare_entry("Symmetric gradient", "true", Patterns::Bool());
 	prm.leave_subsection();
 }
 
-void RightHandSide::parse_parameters(ParameterHandler &prm)
+void BulkParameters::parse_parameters(ParameterHandler &prm)
 {
-	prm.enter_subsection("RightHandSide");
+	prm.enter_subsection("BulkParameters");
 		force = string_to_map_int_string(prm.get("Force"), ",", ":");
+		sym_grad = prm.get_bool("Symmetric gradient");
 	prm.leave_subsection();
 }
 
@@ -163,7 +165,7 @@ void CostFunction::declare_parameters(ParameterHandler &prm)
 {
     prm.enter_subsection("CostFunction");
         prm.declare_entry("Boundary integral", "", Patterns::Map(Patterns::Integer(), Patterns::Anything(), 0, 1000, "@"));
-        prm.declare_entry("Volume integral",   "", Patterns::Map(Patterns::Integer(), Patterns::Anything()));
+        prm.declare_entry("Volume integral",   "", Patterns::Map(Patterns::Integer(), Patterns::Anything(), 0, 1000, "@"));
     prm.leave_subsection();
 }
 
@@ -183,10 +185,12 @@ void ShapeOptimization::declare_parameters(ParameterHandler &prm)
         prm.declare_entry("Right point", "1;0;0", Patterns::Anything());
         prm.declare_entry("Box height",  "1", Patterns::Double());
         prm.declare_entry("N_control_pts", "8", Patterns::Integer());
+        prm.declare_entry("Max_it", "0", Patterns::Integer());
         prm.declare_entry("F_max", "", Patterns::Anything());
         prm.declare_entry("F_min", "", Patterns::Anything());
         prm.declare_entry("G_max", "1e308", Patterns::Double());
         prm.declare_entry("H_max", "1e308", Patterns::Double());
+        prm.declare_entry("Log file", "", Patterns::FileName(), "Log file for optimization");
     prm.leave_subsection();
 }
 
@@ -199,10 +203,12 @@ void ShapeOptimization::parse_parameters(ParameterHandler &prm)
         p2 = { atof(pstr[0].c_str()), atof(pstr[1].c_str()) };
         height = prm.get_double("Box height");
         np = prm.get_integer("N_control_pts");
+        maxit = prm.get_integer("Max_it");
         f_max = prm.get("F_max");
         f_min = prm.get("F_min");
         g_max = prm.get_double("G_max");
         h_max = prm.get_double("H_max");
+        logfile = prm.get("Log file");
     prm.leave_subsection();
 }
 

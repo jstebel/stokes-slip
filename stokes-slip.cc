@@ -295,7 +295,10 @@ void StokesSlip::assemble_system ()
 			for (unsigned int k=0; k<dofs_per_cell; ++k)
 			{
                 u[k] = fe_values[velocities].value(k,q);
-				grad_phi_u[k] = fe_values[velocities].symmetric_gradient (k, q);
+                                if (prm_.sym_grad)
+				  grad_phi_u[k] = fe_values[velocities].symmetric_gradient(k, q)*sqrt(2.);
+				else
+				  grad_phi_u[k] = fe_values[velocities].gradient(k, q);
 				div_phi_u[k]  = fe_values[velocities].divergence (k, q);
 				phi_p[k]      = fe_values[pressure].value (k, q);
 			}
@@ -567,7 +570,11 @@ void StokesSlip::output_shear_stress() const
           
           for (unsigned int i=0; i<fe.dofs_per_cell; i++)
           {
-            Point<2> Dphi_n = fe_face_values[velocities].symmetric_gradient(i,q_point)*normal;
+            Point<2> Dphi_n;
+            if (prm_.sym_grad)
+              Dphi_n = fe_face_values[velocities].symmetric_gradient(i,q_point)*2*normal;
+            else
+              Dphi_n = fe_face_values[velocities].gradient(i,q_point)*normal;
             shear_stress += solution[local_dof_indices[i]]*(Dphi_n*tangent);
             slip_velocity += solution[local_dof_indices[i]]*fe_face_values[velocities].value(i,q_point)*tangent;
           }
@@ -581,8 +588,11 @@ void StokesSlip::output_shear_stress() const
 
 double StokesSlip::output_cost_function()
 {
+  FEValues<2> fe_values (fe, quadrature_formula,
+            update_values | update_gradients | update_JxW_values | update_quadrature_points);
   FEFaceValues<2> fe_face_values(fe, quad1d_output, update_values | update_gradients | update_normal_vectors | update_quadrature_points | update_JxW_values);
   const FEValuesExtractors::Vector velocities (0);
+  const FEValuesExtractors::Scalar pressure (2);
   std::vector<types::global_dof_index> local_dof_indices (fe.dofs_per_cell);
   double st, sn, ut, un;
   double cost = 0;
@@ -592,12 +602,37 @@ double StokesSlip::output_cost_function()
   endc = dof_handler.end();
   for (; cell!=endc; ++cell)
   {
+    cell->get_dof_indices (local_dof_indices);
+    
+    if (prm_.volume_integral.find(cell->material_id()) != prm_.volume_integral.end())
+    {
+      fe_values.reinit(cell);
+      
+      FunctionParser<6> fp(1);
+      fp.initialize("x,y,ux,uy,p,dxux", prm_.volume_integral[cell->material_id()], {});
+
+      for (unsigned int q_point=0; q_point<quadrature_formula.size(); q_point++)
+      {
+        double ux = 0, uy = 0, pr = 0, dxux = 0;
+        
+        for (unsigned int i=0; i<fe.dofs_per_cell; i++)
+        {
+          ux += solution[local_dof_indices[i]]*fe_values[velocities].value(i,q_point)[0];
+          uy += solution[local_dof_indices[i]]*fe_values[velocities].value(i,q_point)[1];
+          pr  += solution[local_dof_indices[i]]*fe_values[pressure].value(i,q_point);
+          dxux += solution[local_dof_indices[i]]*fe_values[velocities].gradient(i,q_point)[0][0];
+        }
+        
+        Tensor<1,6> p({fe_values.quadrature_point(q_point)[0], fe_values.quadrature_point(q_point)[1], ux, uy, pr, dxux});
+        cost += fp.value(p)*fe_values.JxW(q_point);
+      }
+    }
+    
     for (unsigned int face = 0; face < 4; ++face)
     {
       if (cell->at_boundary(face) && prm_.boundary_integral.find(cell->face(face)->boundary_indicator()) != prm_.boundary_integral.end())
       {
         fe_face_values.reinit(cell, face);
-        cell->get_dof_indices (local_dof_indices);
         
         FunctionParser<6> fp(1);
         fp.initialize("x,y,ut,un,st,sn", prm_.boundary_integral[cell->face(face)->boundary_indicator()], {});
@@ -610,7 +645,11 @@ double StokesSlip::output_cost_function()
           
           for (unsigned int i=0; i<fe.dofs_per_cell; i++)
           {
-            Point<2> Dphi_n = fe_face_values[velocities].symmetric_gradient(i,q_point)*normal;
+            Point<2> Dphi_n;
+            if (prm_.sym_grad)
+              Dphi_n = fe_face_values[velocities].symmetric_gradient(i,q_point)*2*normal;
+            else
+              Dphi_n = fe_face_values[velocities].gradient(i,q_point)*normal;
             st += solution[local_dof_indices[i]]*(Dphi_n*tangent);
             sn += solution[local_dof_indices[i]]*(Dphi_n*normal);
             ut += solution[local_dof_indices[i]]*fe_face_values[velocities].value(i,q_point)*tangent;
@@ -707,15 +746,28 @@ double StokesSlip::run (const alglib::real_1d_array &x)
 
 StokesSlip *stokes_problem;
 
-void myfunc(const alglib::real_1d_array &x, alglib::real_1d_array &fi, void *ptr)
+void myfunc(const alglib::real_1d_array &x, double &fi, void *ptr)
 {
-  fi[0] = sqrt(stokes_problem->run(x));
+  fi = stokes_problem->run(x);
 }
 
 void report(const alglib::real_1d_array &x, double fval, void *ptr)
 {
   static int iter = 0;
-  printf("iter  fval\n----------------------------\n%5d %g\n\n", ++iter, fval);
+  static std::ofstream f(stokes_problem->prm().logfile.c_str());
+  
+  if (iter == 0)
+    f << "iter fval x\n-------------\n";
+  
+  printf("\n----------------------------\n");
+  printf("iter  fval\n");
+  printf("%5d %g\n", ++iter, fval);
+  printf("----------------------------\n\n");
+
+  f << iter << " " << fval << " ";
+  for (unsigned int i=0; i<x.length(); ++i)
+    f << x[i] << " ";
+  f << std::endl;
 }
 
 
@@ -724,37 +776,73 @@ int main (int argc, char **argv)
   if (argc == 2)
   {
 	stokes_problem = new StokesSlip(argv[1]);
+    const unsigned int np = stokes_problem->prm().np;
 // 	stokes_problem.run ();
     
     alglib::real_1d_array x;
     double epsg = 1e-6;
     double epsf = 0;
     double epsx = 0;
-    alglib::ae_int_t maxits = 0;
-    alglib::minlmstate state;
-    alglib::minlmreport rep;
-    x.setlength(stokes_problem->prm().np);
+    alglib::ae_int_t maxits = stokes_problem->prm().maxit;
+    alglib::minbleicstate state;
+    alglib::minbleicreport rep;
+    x.setlength(np);
     
+    // setup bound constraints
     alglib::real_1d_array lb, ub;
     lb.setlength(x.length());
     ub.setlength(x.length());
     FunctionParser<1> fpl(1), fpu(1);
     fpu.initialize("x", stokes_problem->prm().f_max, {});
     fpl.initialize("x", stokes_problem->prm().f_min, {});
-    for (unsigned int i=0; i<stokes_problem->prm().np; i++)
+    for (unsigned int i=0; i<np; i++)
     {
       x[i] = 0;
-      Point<1> p(double(i)/(stokes_problem->prm().np-1));
+      Point<1> p(double(i)/(np-1));
       lb[i] = fpl.value(p);
       ub[i] = fpu.value(p);
       printf("lb[%d] = %f ub[%d] = %f\n", i, lb[i], i, ub[i]);
     }
-    alglib::minlmcreatev(x.length(), 1, x, 0.0001, state);
-    alglib::minlmsetbc(state, lb, ub);
-    alglib::minlmsetcond(state, epsg, epsf, epsx, maxits);
-    alglib::minlmsetxrep(state, true);
-    alglib::minlmoptimize(state, myfunc, report);
-    alglib::minlmresults(state, x, rep);
+    
+    // setup linear constraints
+    alglib::real_2d_array c;
+    alglib::integer_1d_array ct;
+    c.setlength(4*np-2,np+1);
+    ct.setlength(4*np-2);
+    // 1st order difference constraints
+    for (unsigned int i=0; i<np; ++i)
+    {
+      c(2*i,i+1)= 1;
+      c(2*i,i)  =-1;
+      c(2*i,np) = stokes_problem->prm().g_max/(np-1);
+      ct(2*i) = -1;
+      c(2*i+1,i+1)= 1;
+      c(2*i+1,i)  =-1;
+      c(2*i+1,np) = -stokes_problem->prm().g_max/(np-1);
+      ct(2*i+1) = 1;
+    }
+    // 2nd difference constraints
+    for (unsigned int i=1; i<np; ++i)
+    {
+      c(2*(np+i-1),i+1) =  1;
+      c(2*(np+i-1),i)   = -2;
+      c(2*(np+i-1),i-1) = 1;
+      c(2*(np+i-1),np)  = stokes_problem->prm().h_max/((np-1)*(np-1));
+      ct(2*(np+i-1)) = -1;
+      c(2*(np+i)-1,i+1) =  1;
+      c(2*(np+i)-1,i)   = -2;
+      c(2*(np+i)-1,i-1) = 1;
+      c(2*(np+i)-1,np)  = -stokes_problem->prm().h_max/((np-1)*(np-1));
+      ct(2*(np+i)-1) = 1;
+    }
+    
+    alglib::minbleiccreatef(x.length(), x, 0.0001, state);
+    alglib::minbleicsetbc(state, lb, ub);
+    alglib::minbleicsetlc(state, c, ct);
+    alglib::minbleicsetcond(state, epsg, epsf, epsx, maxits);
+    alglib::minbleicsetxrep(state, true);
+    alglib::minbleicoptimize(state, &myfunc, report);
+    alglib::minbleicresults(state, x, rep);
 
     printf("Optimization return code: %d\n", int(rep.terminationtype));
     stokes_problem->run(x);
