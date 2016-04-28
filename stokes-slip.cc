@@ -149,7 +149,7 @@ void StokesSlip::make_grid (const alglib::real_1d_array &x)
 	grid_in.read_msh(input_file);
     
     double l = (prm_.p2-prm_.p1).norm();
-    Point<2> t=(prm_.p2-prm_.p1)/l, n(-t[1], t[0]);
+    Tensor<1,2> t=(prm_.p2-prm_.p1)/l, n({-t[1], t[0]});
     std::vector<double> X(prm_.np);
     for (unsigned int i=0; i<prm_.np; ++i)
       X[i] = double(i)/(prm_.np-1);
@@ -511,8 +511,8 @@ void StokesSlip::assemble_stress_rhs ()
                     for (unsigned int i=0; i<dofs_per_cell; i++)
                       u += solution[local_dof_indices[i]]*fe_face_values[velocities].value(i,q_point);
                     
-                    Point<2> normal = fe_face_values.normal_vector(q_point);
-                    Point<2> tangent = {-normal[1], normal[0]};
+                    Tensor<1,2> normal = fe_face_values.normal_vector(q_point);
+                    Tensor<1,2> tangent({-normal[1], normal[0]});
                     double u_tau = u*tangent;
 					
 					for (unsigned int i=0; i<dofs_per_cell; i++)
@@ -565,12 +565,12 @@ void StokesSlip::output_shear_stress() const
         {
           shear_stress = 0;
           slip_velocity = 0;
-          Point<2> normal = fe_face_values.normal_vector(q_point);
-          Point<2> tangent = {-normal[1], normal[0]};
+          Tensor<1,2> normal = fe_face_values.normal_vector(q_point);
+          Tensor<1,2> tangent({-normal[1], normal[0]});
           
           for (unsigned int i=0; i<fe.dofs_per_cell; i++)
           {
-            Point<2> Dphi_n;
+            Tensor<1,2> Dphi_n;
             if (prm_.sym_grad)
               Dphi_n = fe_face_values[velocities].symmetric_gradient(i,q_point)*2*normal;
             else
@@ -637,12 +637,12 @@ double StokesSlip::output_cost_function()
         for (unsigned int q_point=0; q_point<quad1d_output.size(); q_point++)
         {
           st = sn = ut = un = 0;
-          Point<2> normal = fe_face_values.normal_vector(q_point);
-          Point<2> tangent = {-normal[1], normal[0]};
+          Tensor<1,2> normal = fe_face_values.normal_vector(q_point);
+          Tensor<1,2> tangent({-normal[1], normal[0]});
           
           for (unsigned int i=0; i<fe.dofs_per_cell; i++)
           {
-            Point<2> Dphi_n;
+            Tensor<1,2> Dphi_n;
             if (prm_.sym_grad)
               Dphi_n = fe_face_values[velocities].symmetric_gradient(i,q_point)*2*normal;
             else
