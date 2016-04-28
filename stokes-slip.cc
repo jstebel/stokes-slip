@@ -327,7 +327,7 @@ void StokesSlip::assemble_system ()
             {
               for (unsigned int i=0; i<dofs_per_cell; ++i)
               {
-                Point<2> rhs(rhs_values[q_point][0], rhs_values[q_point][1]);
+                Tensor<1,2> rhs({rhs_values[q_point][0], rhs_values[q_point][1]});
                 cell_rhs(i) += fe_values[velocities].value(i,q_point) *
                     rhs *
                     fe_values.JxW(q_point);
@@ -350,7 +350,7 @@ void StokesSlip::assemble_system ()
 
               for (unsigned int q_point=0; q_point<quad1d.size(); q_point++)
               {
-                Point<2> normal = fe_face_values.normal_vector(q_point);
+                Tensor<1,2> normal = fe_face_values.normal_vector(q_point);
                 
                 for (unsigned int i=0; i<dofs_per_cell; i++)
                 {
@@ -374,7 +374,7 @@ void StokesSlip::assemble_system ()
 
               for (unsigned int q_point=0; q_point<quad1d.size(); q_point++)
               {
-                Point<2> normal = fe_face_values.normal_vector(q_point);
+                Tensor<1,2> normal = fe_face_values.normal_vector(q_point);
                 
                 for (unsigned int i=0; i<dofs_per_cell; i++)
                 {
@@ -397,8 +397,8 @@ void StokesSlip::assemble_system ()
 
               for (unsigned int q_point=0; q_point<quad1d.size(); q_point++)
               {
-                Point<2> normal = fe_face_values.normal_vector(q_point);
-                Point<2> bc_tangent = { bc_values[q_point][0], bc_values[q_point][1] };
+                Tensor<1,2> normal = fe_face_values.normal_vector(q_point);
+                Tensor<1,2> bc_tangent({ bc_values[q_point][0], bc_values[q_point][1] });
                 bc_tangent -= (bc_tangent*normal)*normal;
                 
                 for (unsigned int i=0; i<dofs_per_cell; i++)
@@ -427,7 +427,7 @@ void StokesSlip::assemble_system ()
 
               for (unsigned int q_point=0; q_point<quad1d.size(); q_point++)
               {
-                Point<2> bc_value = {bc_values[q_point][0],bc_values[q_point][1]};
+                Tensor<1,2> bc_value({bc_values[q_point][0],bc_values[q_point][1]});
                 
                 for (unsigned int i=0; i<dofs_per_cell; i++)
                 {
@@ -451,7 +451,7 @@ void StokesSlip::assemble_system ()
 
               for (unsigned int q_point=0; q_point<quad1d.size(); q_point++)
               {
-                Point<2> traction = {bc_values[q_point][0], bc_values[q_point][1]};
+                Tensor<1,2> traction({bc_values[q_point][0], bc_values[q_point][1]});
                 
                 for (unsigned int i=0; i<dofs_per_cell; i++)
                 {
@@ -507,7 +507,7 @@ void StokesSlip::assemble_stress_rhs ()
 
 				for (unsigned int q_point=0; q_point<quad1d.size(); q_point++)
 				{
-                    Point<2> u({0, 0});
+                    Tensor<1,2> u({0, 0});
                     for (unsigned int i=0; i<dofs_per_cell; i++)
                       u += solution[local_dof_indices[i]]*fe_face_values[velocities].value(i,q_point);
                     
@@ -623,7 +623,7 @@ double StokesSlip::output_cost_function()
         FunctionParser<2> fp(1);
         fp.initialize("x,y", prm_.volume_integral[cell->material_id()], {{"ux",ux}, {"uy",uy}, {"p",pr}, {"dxux",dxux}});
         
-        Tensor<1,2> p({fe_values.quadrature_point(q_point)[0], fe_values.quadrature_point(q_point)[1]});
+        Point<2> p({fe_values.quadrature_point(q_point)[0], fe_values.quadrature_point(q_point)[1]});
         cost += fp.value(p)*fe_values.JxW(q_point);
       }
     }
@@ -656,7 +656,7 @@ double StokesSlip::output_cost_function()
           FunctionParser<2> fp(1);
           fp.initialize("x,y", prm_.boundary_integral[cell->face(face)->boundary_indicator()], {{"ut",ut}, {"un",un}, {"st",st}, {"sn",sn}});
           
-          Tensor<1,2> p({fe_face_values.quadrature_point(q_point)[0], fe_face_values.quadrature_point(q_point)[1]});
+          Point<2> p({fe_face_values.quadrature_point(q_point)[0], fe_face_values.quadrature_point(q_point)[1]});
           cost += fp.value(p)*fe_face_values.JxW(q_point);
         }
       }
