@@ -608,9 +608,6 @@ double StokesSlip::output_cost_function()
     {
       fe_values.reinit(cell);
       
-      FunctionParser<6> fp(1);
-      fp.initialize("x,y,ux,uy,p,dxux", prm_.volume_integral[cell->material_id()], {});
-
       for (unsigned int q_point=0; q_point<quadrature_formula.size(); q_point++)
       {
         double ux = 0, uy = 0, pr = 0, dxux = 0;
@@ -622,8 +619,11 @@ double StokesSlip::output_cost_function()
           pr  += solution[local_dof_indices[i]]*fe_values[pressure].value(i,q_point);
           dxux += solution[local_dof_indices[i]]*fe_values[velocities].gradient(i,q_point)[0][0];
         }
+
+        FunctionParser<2> fp(1);
+        fp.initialize("x,y", prm_.volume_integral[cell->material_id()], {{"ux",ux}, {"uy",uy}, {"p",pr}, {"dxux",dxux}});
         
-        Tensor<1,6> p({fe_values.quadrature_point(q_point)[0], fe_values.quadrature_point(q_point)[1], ux, uy, pr, dxux});
+        Tensor<1,2> p({fe_values.quadrature_point(q_point)[0], fe_values.quadrature_point(q_point)[1]});
         cost += fp.value(p)*fe_values.JxW(q_point);
       }
     }
@@ -634,9 +634,6 @@ double StokesSlip::output_cost_function()
       {
         fe_face_values.reinit(cell, face);
         
-        FunctionParser<6> fp(1);
-        fp.initialize("x,y,ut,un,st,sn", prm_.boundary_integral[cell->face(face)->boundary_indicator()], {});
-
         for (unsigned int q_point=0; q_point<quad1d_output.size(); q_point++)
         {
           st = sn = ut = un = 0;
@@ -656,7 +653,10 @@ double StokesSlip::output_cost_function()
             un += solution[local_dof_indices[i]]*fe_face_values[velocities].value(i,q_point)*normal;
           }
           
-          Tensor<1,6> p({fe_face_values.quadrature_point(q_point)[0], fe_face_values.quadrature_point(q_point)[1], ut, un, st, sn});
+          FunctionParser<2> fp(1);
+          fp.initialize("x,y", prm_.boundary_integral[cell->face(face)->boundary_indicator()], {{"ut",ut}, {"un",un}, {"st",st}, {"sn",sn}});
+          
+          Tensor<1,2> p({fe_face_values.quadrature_point(q_point)[0], fe_face_values.quadrature_point(q_point)[1]});
           cost += fp.value(p)*fe_face_values.JxW(q_point);
         }
       }
