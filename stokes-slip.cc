@@ -131,6 +131,22 @@ StokesSlip::StokesSlip (const std::string &input_file)
   prm_(input_file)
 {}
 
+double bezier(const alglib::real_1d_array &a, double x)
+{
+    unsigned int n = a.length();
+    if (x == 1) return a[n];
+    
+    double b = 0;
+    double term = pow(1.-x,n);
+    for (unsigned int i=0; i<n; i++)
+    {
+      if (i > 0)
+        term *= x*(n-i)/((1.-x)*(i+1));
+      b += a[i]*term;
+    }
+    return b;
+}
+
 
 void StokesSlip::make_grid (const alglib::real_1d_array &x)
 {
@@ -150,13 +166,13 @@ void StokesSlip::make_grid (const alglib::real_1d_array &x)
     
     double l = (prm_.p2-prm_.p1).norm();
     Tensor<1,2> t=(prm_.p2-prm_.p1)/l, n({-t[1], t[0]});
-    std::vector<double> X(prm_.np);
-    for (unsigned int i=0; i<prm_.np; ++i)
-      X[i] = double(i)/(prm_.np-1);
-    alglib::real_1d_array AX;
-    AX.setcontent(prm_.np, &(X[0]));
-    alglib::spline1dinterpolant spline;
-    alglib::spline1dbuildcubic(AX, x, X.size(), 2,0.0,2,0.0, spline);
+//     std::vector<double> X(prm_.np);
+//     for (unsigned int i=0; i<prm_.np; ++i)
+//       X[i] = double(i)/(prm_.np-1);
+//     alglib::real_1d_array AX;
+//     AX.setcontent(prm_.np, &(X[0]));
+//     alglib::spline1dinterpolant spline;
+//     alglib::spline1dbuildcubic(AX, x, X.size(), 2,0.0,2,0.0, spline);
     // deform the mesh according to a function alpha
     std::vector<bool> moved(triangulation.n_vertices(), false);
     for (Triangulation<2>::cell_iterator cell=triangulation.begin(); cell != triangulation.end(); ++cell)
@@ -168,7 +184,7 @@ void StokesSlip::make_grid (const alglib::real_1d_array &x)
             Point<2> p = cell->vertex(vid);
             double pn = (p-prm_.p1)*n, pt = (p-prm_.p1)*t;
             if (pn >= 0 & pn <= prm_.height & pt >= 0 & pt <= l)
-              cell->vertex(vid) += n*(1-(p-prm_.p1)*n/prm_.height)*alglib::spline1dcalc(spline,(p-prm_.p1)*t/l);
+              cell->vertex(vid) += n*(1-(p-prm_.p1)*n/prm_.height)*bezier(x, (p-prm_.p1)*t/l);//alglib::spline1dcalc(spline,(p-prm_.p1)*t/l);
             moved[cell->vertex_index(vid)] = true;
           }
         }
