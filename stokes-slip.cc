@@ -141,7 +141,7 @@ double bezier(const alglib::real_1d_array &a, double x)
     for (unsigned int i=0; i<n; i++)
     {
       if (i > 0)
-        term *= x*(n-i)/((1.-x)*(i+1));
+        term *= x*(n-i+1)/((1.-x)*i);
       b += a[i]*term;
     }
     return b;
