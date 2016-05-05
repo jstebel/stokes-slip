@@ -82,6 +82,8 @@ private:
   Vector<double>       stress_grad;
   
   Parameters::AllParameters prm_;
+  
+  int rank;
 };
 
 

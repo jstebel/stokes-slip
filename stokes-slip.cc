@@ -57,7 +57,9 @@ StokesSlip::StokesSlip (const std::string &input_file)
   quad1d(QGauss<1>(2)),
   quad1d_output(QGaussLobatto<1>(2)),
   prm_(input_file)
-{}
+{
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+}
 
 double bezier(const alglib::real_1d_array &a, double x)
 {
@@ -78,9 +80,11 @@ double bezier(const alglib::real_1d_array &a, double x)
 
 void StokesSlip::make_grid (const alglib::real_1d_array &x)
 {
-    std::cout << "x = ";
-    for (unsigned int i=0; i<prm_.np; ++i) std::cout << x[i] << " ";
-    std::cout << std::endl;
+    if (rank==0) {
+      std::cout << "x = ";
+      for (unsigned int i=0; i<prm_.np; ++i) std::cout << x[i] << " ";
+      std::cout << std::endl;
+    }
     
 	GridIn<2> grid_in;
 	grid_in.attach_triangulation(triangulation);
@@ -88,7 +92,7 @@ void StokesSlip::make_grid (const alglib::real_1d_array &x)
 	std::ifstream input_file(prm_.mesh_file);
 	Assert (input_file, ExcFileNotOpen(prm_.mesh_file.c_str()));
 
-	std::cout << "* Read mesh file '" << prm_.mesh_file << "'"<< std::endl;
+	if (rank==0) std::cout << "* Read mesh file '" << prm_.mesh_file << "'"<< std::endl;
     triangulation.clear();
 	grid_in.read_msh(input_file);
     
@@ -157,12 +161,14 @@ void StokesSlip::make_grid (const alglib::real_1d_array &x)
 		}
 	}
 */
-	std::cout << "Number of active cells: "
-		  << triangulation.n_active_cells()
-		  << std::endl;
-	std::cout << "Total number of cells: "
-		  << triangulation.n_cells()
-		  << std::endl;
+	if (rank==0) {
+	  std::cout << "Number of active cells: "
+	  	    << triangulation.n_active_cells()
+		    << std::endl;
+	  std::cout << "Total number of cells: "
+		    << triangulation.n_cells()
+		    << std::endl;
+	}
 }
 
 /*
@@ -179,9 +185,10 @@ void StokesSlip::make_grid (const alglib::real_1d_array &x)
 void StokesSlip::setup_system ()
 {
 	dof_handler.distribute_dofs (fe);
-	std::cout << "Number of degrees of freedom: "
-		  << dof_handler.n_dofs()
-		  << std::endl;
+	if (rank==0)
+	  std::cout << "Number of degrees of freedom: "
+		    << dof_handler.n_dofs()
+		    << std::endl;
 
 	CompressedSparsityPattern c_sparsity(dof_handler.n_dofs());
 	DoFTools::make_sparsity_pattern (dof_handler, c_sparsity);
@@ -490,7 +497,11 @@ void StokesSlip::output_shear_stress() const
   double shear_stress;
   double slip_velocity;
 
-  std::ofstream f(prm_.output_file_base + ".dat");
+  std::ostringstream fname;
+  fname << prm_.output_file_base;
+  if (rank!=0) fname << "." << rank;
+  fname << ".dat";
+  std::ofstream f(fname.str());
   f << "# X Y Shear_stress U_tau" << std::endl;
   
   DoFHandler<2>::active_cell_iterator
@@ -607,7 +618,7 @@ double StokesSlip::output_cost_function()
     }
   }
   
-  std::cout << "Cost function = " << cost << std::endl;
+  if (rank==0) std::cout << "Cost function = " << cost << std::endl;
   return cost;
 }
 
@@ -630,7 +641,11 @@ void StokesSlip::output_vtk () const
 				  data_component_interpretation);
 	data_out.build_patches ();
 
-	std::ofstream output (prm_.output_file_base + ".vtk");
+        std::ostringstream fname;
+        fname << prm_.output_file_base;
+        if (rank != 0) fname << "." << rank;
+        fname << ".vtk";
+	std::ofstream output (fname.str());
 	data_out.write_vtk (output);
 }
 
@@ -667,20 +682,22 @@ double StokesSlip::run (const alglib::real_1d_array &x)
   assemble_system();
   double system_rhs_norm = system_rhs.l2_norm();
   
-  printf("\nIter Abs_residual Rel_residual\n");
+  if (rank==0) printf("\nIter Abs_residual Rel_residual\n");
   do
   {
     assemble_stress_rhs();
     delta = solve ();
     iter++;
-    printf("%4d %12g %12g\n", iter, delta, delta/system_rhs_norm);
+    if (rank==0) printf("%4d %12g %12g\n", iter, delta, delta/system_rhs_norm);
   } while (delta > std::max(prm_.a_tol, prm_.r_tol*system_rhs_norm) && iter < prm_.max_iter);
   
-  printf("\n");
+  if (rank==0) {
+    printf("\n");
   
-  if (delta <= prm_.a_tol) printf("Absolute tolerance reached.\n");
-  if (delta <= prm_.r_tol*system_rhs_norm) printf("Relative tolerance reached.\n");
-  if (iter  >= prm_.max_iter) printf("Maximal number of iterations reached.\n");
+    if (delta <= prm_.a_tol) printf("Absolute tolerance reached.\n");
+    if (delta <= prm_.r_tol*system_rhs_norm) printf("Relative tolerance reached.\n");
+    if (iter  >= prm_.max_iter) printf("Maximal number of iterations reached.\n");
+  }
   
   output_vtk ();
   output_shear_stress();
