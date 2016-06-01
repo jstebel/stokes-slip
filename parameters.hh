@@ -53,6 +53,7 @@ namespace Parameters {
     };
     
     struct IO {
+        unsigned int dim;
         std::string mesh_file;
         std::string output_file_base;
 
@@ -74,6 +75,7 @@ namespace Parameters {
       double height;
       unsigned int np;
       unsigned int maxit;
+      std::vector<double> init_guess;
       std::string f_max;
       std::string f_min;
       double g_max;

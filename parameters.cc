@@ -186,6 +186,7 @@ void ShapeOptimization::declare_parameters(ParameterHandler &prm)
         prm.declare_entry("Box height",  "1", Patterns::Double());
         prm.declare_entry("N_control_pts", "8", Patterns::Integer());
         prm.declare_entry("Max_it", "0", Patterns::Integer());
+        prm.declare_entry("Initial shape", "", Patterns::List(Patterns::Double()), "Initial control points of bezier curve describing shape.");
         prm.declare_entry("F_max", "", Patterns::Anything());
         prm.declare_entry("F_min", "", Patterns::Anything());
         prm.declare_entry("G_max", "1e308", Patterns::Double());
@@ -204,6 +205,15 @@ void ShapeOptimization::parse_parameters(ParameterHandler &prm)
         height = prm.get_double("Box height");
         np = prm.get_integer("N_control_pts");
         maxit = prm.get_integer("Max_it");
+        std::vector<std::string> init_str = split_string(prm.get("Initial shape"), ",");
+        if (init_str.size() == np)
+        {
+          for (auto s : init_str) init_guess.push_back(atof(s.c_str()));
+        }
+        else
+        {
+          init_guess.resize(np, 0.);
+        }
         f_max = prm.get("F_max");
         f_min = prm.get("F_min");
         g_max = prm.get_double("G_max");
@@ -238,6 +248,7 @@ void Numerics::parse_parameters(ParameterHandler &prm)
 void IO::declare_parameters(ParameterHandler &prm)
 {
 	prm.enter_subsection("InputOutput");
+        prm.declare_entry("Dimension", "2", Patterns::Integer(), "Space dimension of the problem.");
  		prm.declare_entry("Mesh", "", Patterns::FileName(), "Mesh file name");
 		prm.declare_entry("Output", "", Patterns::FileName(), "Output file name base");
 	prm.leave_subsection();
@@ -246,6 +257,7 @@ void IO::declare_parameters(ParameterHandler &prm)
 void IO::parse_parameters(ParameterHandler &prm)
 {
 	prm.enter_subsection("InputOutput");
+        dim = prm.get_integer("Dimension");
 		mesh_file = prm.get("Mesh");
 		output_file_base = prm.get("Output");
 	prm.leave_subsection();

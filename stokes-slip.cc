@@ -44,6 +44,28 @@
 
 using namespace dealii;
 
+
+template<unsigned int dim> class StokesSlip;
+
+
+class StokesSlipWrapper
+{
+public:
+  StokesSlipWrapper(const std::string &input_file);
+  ~StokesSlipWrapper();
+  
+  double run (const alglib::real_1d_array &x);
+  
+  const Parameters::AllParameters &prm() const { return prm_; }
+  
+private:
+  Parameters::AllParameters prm_;
+  
+  StokesSlip<2> *stokes2d;
+};
+
+
+template<unsigned int dim>
 class StokesSlip
 {
 public:
@@ -100,12 +122,12 @@ private:
 //            0.5;
   }
 
-  Triangulation<2>     triangulation;
-  FESystem<2>          fe;
-  DoFHandler<2>        dof_handler;
-  Quadrature<2>        quadrature_formula;
-  Quadrature<1>        quad1d;
-  Quadrature<1>        quad1d_output;
+  Triangulation<dim>     triangulation;
+  FESystem<dim>          fe;
+  DoFHandler<dim>        dof_handler;
+  Quadrature<dim>        quadrature_formula;
+  Quadrature<dim-1>        quad1d;
+  Quadrature<dim-1>        quad1d_output;
 
   SparsityPattern      sparsity_pattern;
   SparseMatrix<double> system_matrix;
@@ -119,15 +141,46 @@ private:
 };
 
 
-
-
-StokesSlip::StokesSlip (const std::string &input_file)
+StokesSlipWrapper::StokesSlipWrapper(const std::string& input_file)
   :
-  fe(FE_Q<2>(3), 2, FE_Q<2>(2), 1),
+  prm_(input_file),
+  stokes2d(nullptr)
+{
+  switch (prm_.dim)
+  {
+  case 2:
+    stokes2d = new StokesSlip<2>(input_file);
+    break;
+    
+  default:
+    std::cerr << "Space dimension " << prm_.dim << " not supported.\n";
+    exit(1);
+  }
+}
+
+
+StokesSlipWrapper::~StokesSlipWrapper()
+{
+  if (stokes2d != nullptr) delete stokes2d;
+}
+
+
+double StokesSlipWrapper::run(const alglib::real_1d_array& x)
+{
+  return stokes2d->run(x);
+}
+
+
+
+
+template<unsigned int dim>
+StokesSlip<dim>::StokesSlip (const std::string &input_file)
+  :
+  fe(FE_Q<dim>(3), dim, FE_Q<dim>(2), 1),
   dof_handler(triangulation),
-  quadrature_formula(QGauss<2>(4)),
-  quad1d(QGauss<1>(2)),
-  quad1d_output(QGaussLobatto<1>(2)),
+  quadrature_formula(QGauss<dim>(4)),
+  quad1d(QGauss<dim-1>(2)),
+  quad1d_output(QGaussLobatto<dim-1>(2)),
   prm_(input_file)
 {}
 
@@ -148,13 +201,14 @@ double bezier(const alglib::real_1d_array &a, double x)
 }
 
 
-void StokesSlip::make_grid (const alglib::real_1d_array &x)
+template<unsigned int dim>
+void StokesSlip<dim>::make_grid (const alglib::real_1d_array &x)
 {
     std::cout << "x = ";
     for (unsigned int i=0; i<prm_.np; ++i) std::cout << x[i] << " ";
     std::cout << std::endl;
     
-	GridIn<2> grid_in;
+	GridIn<dim> grid_in;
 	grid_in.attach_triangulation(triangulation);
 
 	std::ifstream input_file(prm_.mesh_file);
@@ -175,7 +229,7 @@ void StokesSlip::make_grid (const alglib::real_1d_array &x)
 //     alglib::spline1dbuildcubic(AX, x, X.size(), 2,0.0,2,0.0, spline);
     // deform the mesh according to a function alpha
     std::vector<bool> moved(triangulation.n_vertices(), false);
-    for (Triangulation<2>::cell_iterator cell=triangulation.begin(); cell != triangulation.end(); ++cell)
+    for (typename Triangulation<dim>::cell_iterator cell=triangulation.begin(); cell != triangulation.end(); ++cell)
     {
         for (unsigned int vid=0; vid<4; ++vid)
         {
@@ -248,7 +302,8 @@ void StokesSlip::make_grid (const alglib::real_1d_array &x)
  *    +-------+
  *        2
  */
-void StokesSlip::setup_system ()
+template<unsigned int dim>
+void StokesSlip<dim>::setup_system ()
 {
 	dof_handler.distribute_dofs (fe);
 	std::cout << "Number of degrees of freedom: "
@@ -267,11 +322,12 @@ void StokesSlip::setup_system ()
     stress_hess.reinit (sparsity_pattern);
 }
 
-void StokesSlip::assemble_system ()
+template<unsigned int dim>
+void StokesSlip<dim>::assemble_system ()
 {
-	FEValues<2> fe_values (fe, quadrature_formula,
+	FEValues<dim> fe_values (fe, quadrature_formula,
 			update_values | update_gradients | update_JxW_values | update_quadrature_points);
-	FEFaceValues<2> fe_face_values(fe, quad1d, update_values | update_normal_vectors | update_JxW_values | update_quadrature_points);
+	FEFaceValues<dim> fe_face_values(fe, quad1d, update_values | update_normal_vectors | update_JxW_values | update_quadrature_points);
 	
 	const unsigned int   dofs_per_cell = fe.dofs_per_cell;
 	const unsigned int   n_q_points    = quadrature_formula.size();
@@ -284,17 +340,17 @@ void StokesSlip::assemble_system ()
 	std::vector<types::global_dof_index> local_dof_indices (dofs_per_cell);
 
 	const FEValuesExtractors::Vector velocities (0);
-	const FEValuesExtractors::Scalar pressure (2);
+	const FEValuesExtractors::Scalar pressure (dim);
 
-    std::vector<Tensor<1,2> > u(dofs_per_cell);
-	std::vector<Tensor<2,2> > grad_phi_u (dofs_per_cell);
+    std::vector<Tensor<1,dim> > u(dofs_per_cell);
+	std::vector<Tensor<2,dim> > grad_phi_u (dofs_per_cell);
 	std::vector<double>       div_phi_u   (dofs_per_cell);
 	std::vector<double>       phi_p       (dofs_per_cell);
 	
 	system_matrix = 0;
 	system_rhs = 0;
     
-	DoFHandler<2>::active_cell_iterator
+	typename DoFHandler<dim>::active_cell_iterator
       cell = dof_handler.begin_active(),
       endc = dof_handler.end();
 	for (; cell!=endc; ++cell)
@@ -485,7 +541,8 @@ void StokesSlip::assemble_system ()
 }
 
 
-void StokesSlip::assemble_stress_rhs ()
+template<unsigned int dim>
+void StokesSlip<dim>::assemble_stress_rhs ()
 {
 	FEFaceValues<2> fe_face_values(fe, quad1d, update_values | update_JxW_values | update_normal_vectors | update_quadrature_points);
 	
@@ -553,8 +610,8 @@ void StokesSlip::assemble_stress_rhs ()
 }
 
 
-
-void StokesSlip::output_shear_stress() const
+template<unsigned int dim>
+void StokesSlip<dim>::output_shear_stress() const
 {
   FEFaceValues<2> fe_face_values(fe, quad1d_output, update_values | update_gradients | update_normal_vectors | update_quadrature_points);
   const FEValuesExtractors::Vector velocities (0);
@@ -602,7 +659,8 @@ void StokesSlip::output_shear_stress() const
 }
 
 
-double StokesSlip::output_cost_function()
+template<unsigned int dim>
+double StokesSlip<dim>::output_cost_function()
 {
   FEValues<2> fe_values (fe, quadrature_formula,
             update_values | update_gradients | update_JxW_values | update_quadrature_points);
@@ -685,8 +743,8 @@ double StokesSlip::output_cost_function()
 
 
 
-
-void StokesSlip::output_vtk () const
+template<unsigned int dim>
+void StokesSlip<dim>::output_vtk () const
 {
 	std::vector<std::string> solution_names (2, "velocity");
 	solution_names.push_back ("pressure");
@@ -707,7 +765,8 @@ void StokesSlip::output_vtk () const
 }
 
 
-double StokesSlip::solve ()
+template<unsigned int dim>
+double StokesSlip<dim>::solve ()
 {
     SparseDirectUMFPACK solver;
     
@@ -729,7 +788,8 @@ double StokesSlip::solve ()
 }
 
 
-double StokesSlip::run (const alglib::real_1d_array &x)
+template<unsigned int dim>
+double StokesSlip<dim>::run (const alglib::real_1d_array &x)
 {
   double delta;
   unsigned int iter = 0;
@@ -760,7 +820,7 @@ double StokesSlip::run (const alglib::real_1d_array &x)
 }
 
 
-StokesSlip *stokes_problem;
+StokesSlipWrapper *stokes_problem;
 
 void myfunc(const alglib::real_1d_array &x, double &fi, void *ptr)
 {
@@ -791,7 +851,7 @@ int main (int argc, char **argv)
 {
   if (argc == 2)
   {
-	stokes_problem = new StokesSlip(argv[1]);
+	stokes_problem = new StokesSlipWrapper(argv[1]);
     const unsigned int np = stokes_problem->prm().np;
 // 	stokes_problem.run ();
     
@@ -813,54 +873,58 @@ int main (int argc, char **argv)
     fpl.initialize("x", stokes_problem->prm().f_min, {});
     for (unsigned int i=0; i<np; i++)
     {
-      x[i] = 0;
+      if (stokes_problem->prm().init_guess.size() == x.length()) x[i] = stokes_problem->prm().init_guess[i];
       Point<1> p(double(i)/(np-1));
       lb[i] = fpl.value(p);
       ub[i] = fpu.value(p);
       printf("lb[%d] = %f ub[%d] = %f\n", i, lb[i], i, ub[i]);
     }
     
-    // setup linear constraints
-    alglib::real_2d_array c;
-    alglib::integer_1d_array ct;
-    c.setlength(4*np-2,np+1);
-    ct.setlength(4*np-2);
-    // 1st order difference constraints
-    for (unsigned int i=0; i<np; ++i)
+    if (maxits > 0)
     {
-      c(2*i,i+1)= 1;
-      c(2*i,i)  =-1;
-      c(2*i,np) = stokes_problem->prm().g_max/(np-1);
-      ct(2*i) = -1;
-      c(2*i+1,i+1)= 1;
-      c(2*i+1,i)  =-1;
-      c(2*i+1,np) = -stokes_problem->prm().g_max/(np-1);
-      ct(2*i+1) = 1;
-    }
-    // 2nd difference constraints
-    for (unsigned int i=1; i<np; ++i)
-    {
-      c(2*(np+i-1),i+1) =  1;
-      c(2*(np+i-1),i)   = -2;
-      c(2*(np+i-1),i-1) = 1;
-      c(2*(np+i-1),np)  = stokes_problem->prm().h_max/((np-1)*(np-1));
-      ct(2*(np+i-1)) = -1;
-      c(2*(np+i)-1,i+1) =  1;
-      c(2*(np+i)-1,i)   = -2;
-      c(2*(np+i)-1,i-1) = 1;
-      c(2*(np+i)-1,np)  = -stokes_problem->prm().h_max/((np-1)*(np-1));
-      ct(2*(np+i)-1) = 1;
+      // setup linear constraints
+      alglib::real_2d_array c;
+      alglib::integer_1d_array ct;
+      c.setlength(4*np-2,np+1);
+      ct.setlength(4*np-2);
+      // 1st order difference constraints
+      for (unsigned int i=0; i<np; ++i)
+      {
+        c(2*i,i+1)= 1;
+        c(2*i,i)  =-1;
+        c(2*i,np) = stokes_problem->prm().g_max/(np-1);
+        ct(2*i) = -1;
+        c(2*i+1,i+1)= 1;
+        c(2*i+1,i)  =-1;
+        c(2*i+1,np) = -stokes_problem->prm().g_max/(np-1);
+        ct(2*i+1) = 1;
+      }
+      // 2nd difference constraints
+      for (unsigned int i=1; i<np; ++i)
+      {
+        c(2*(np+i-1),i+1) =  1;
+        c(2*(np+i-1),i)   = -2;
+        c(2*(np+i-1),i-1) = 1;
+        c(2*(np+i-1),np)  = stokes_problem->prm().h_max/((np-1)*(np-1));
+        ct(2*(np+i-1)) = -1;
+        c(2*(np+i)-1,i+1) =  1;
+        c(2*(np+i)-1,i)   = -2;
+        c(2*(np+i)-1,i-1) = 1;
+        c(2*(np+i)-1,np)  = -stokes_problem->prm().h_max/((np-1)*(np-1));
+        ct(2*(np+i)-1) = 1;
+      }
+      
+      alglib::minbleiccreatef(x.length(), x, 0.0001, state);
+      alglib::minbleicsetbc(state, lb, ub);
+      alglib::minbleicsetlc(state, c, ct);
+      alglib::minbleicsetcond(state, epsg, epsf, epsx, maxits);
+      alglib::minbleicsetxrep(state, true);
+      alglib::minbleicoptimize(state, &myfunc, report);
+      alglib::minbleicresults(state, x, rep);
+
+      printf("Optimization return code: %d\n", int(rep.terminationtype));
     }
     
-    alglib::minbleiccreatef(x.length(), x, 0.0001, state);
-    alglib::minbleicsetbc(state, lb, ub);
-    alglib::minbleicsetlc(state, c, ct);
-    alglib::minbleicsetcond(state, epsg, epsf, epsx, maxits);
-    alglib::minbleicsetxrep(state, true);
-    alglib::minbleicoptimize(state, &myfunc, report);
-    alglib::minbleicresults(state, x, rep);
-
-    printf("Optimization return code: %d\n", int(rep.terminationtype));
     stokes_problem->run(x);
     
     delete stokes_problem;
