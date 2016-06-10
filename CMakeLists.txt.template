@@ -12,6 +12,7 @@ SET(TARGET "stokes-slip")
 SET(TARGET_SRC
   parameters.cc
   ${TARGET}.cc
+  main.cc
   # You can specify additional files here!
   )
 
@@ -37,5 +38,4 @@ PROJECT(${TARGET})
 DEAL_II_INVOKE_AUTOPILOT()
 
 LINK_DIRECTORIES(/usr/lib/x86_64-linux-gnu)
-TARGET_LINK_LIBRARIES(${TARGET} nlopt)
 TARGET_LINK_LIBRARIES(${TARGET} alglib)

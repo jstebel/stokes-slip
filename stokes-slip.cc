@@ -30,6 +30,7 @@
 #include <deal.II/lac/sparse_direct.h>
 
 #include <deal.II/numerics/data_out.h>
+
 #include <fstream>
 #include <iostream>
 #include <boost/graph/buffer_concepts.hpp>
@@ -40,116 +41,28 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
-#include "optimization.h"
+
+#include "stokes-slip.hh"
 
 using namespace dealii;
 
 
-template<unsigned int dim> class StokesSlip;
-
-
-class StokesSlipWrapper
-{
-public:
-  StokesSlipWrapper(const std::string &input_file);
-  ~StokesSlipWrapper();
-  
-  double run (const alglib::real_1d_array &x);
-  
-  const Parameters::AllParameters &prm() const { return prm_; }
-  
-private:
-  Parameters::AllParameters prm_;
-  
-  StokesSlip<2> *stokes2d;
-};
-
-
-template<unsigned int dim>
-class StokesSlip
-{
-public:
-  StokesSlip (const std::string &input_file);
-
-  double run (const alglib::real_1d_array &x);
-  
-  const Parameters::AllParameters &prm() const { return prm_; }
-
-
-private:
-  void make_grid (const alglib::real_1d_array &x);
-  void setup_system ();
-  void assemble_system ();
-  void assemble_stress_rhs();
-  double solve ();
-  void output_shear_stress() const;
-  double output_cost_function();
-  void output_vtk () const;
-  
-  double phi_grad(double x, double sigma_bound, double sigma_growth)
-  {
-    // quadratic regularization
-    return (fabs(x) < prm_.epsilon)?(x*(sigma_bound/prm_.epsilon+sigma_growth)):(sigma_bound*x/fabs(x)+x*sigma_growth); 
-    
-    // 4th order polynomial regularization
-//     return (fabs(x) < eps)?(-pow(x/eps,3.)*sigma_bound*0.5+x*(1.5*sigma_bound/eps+sigma_growth)):(sigma_bound*x/fabs(x)+x*sigma_growth);
-    
-    // regularization by square root
-//     return (sigma_bound/sqrt(x*x+eps*eps)+sigma_growth*2)*x;
-  }
-  
-  double phi_hess(double x, double sigma_bound, double sigma_growth)
-  { 
-    // quadratic regularization
-    return sigma_growth+((fabs(x) < prm_.epsilon)?(sigma_bound/prm_.epsilon):0);
-    
-    // 4th order polynomial regularization
-//     return sigma_growth+((fabs(x) < eps)?(1.5*sigma_bound/eps*(1.-pow(x/eps,2.))):0);
-    
-    // regularization by square root
-//     return sigma_bound*eps*eps/pow(x*x+eps*eps,1.5)+sigma_growth;
-  }
-
-  double alpha(double x)
-  {
-    return 0.2*exp(-10*pow(0.5-x,2));
-//            0.5*x;
-  }
-  
-  double alpha_p(double x)
-  {
-    return 4*(0.5-x)*exp(-10*pow(0.5-x,2));
-//            0.5;
-  }
-
-  Triangulation<dim>     triangulation;
-  FESystem<dim>          fe;
-  DoFHandler<dim>        dof_handler;
-  Quadrature<dim>        quadrature_formula;
-  Quadrature<dim-1>        quad1d;
-  Quadrature<dim-1>        quad1d_output;
-
-  SparsityPattern      sparsity_pattern;
-  SparseMatrix<double> system_matrix;
-  SparseMatrix<double> stress_hess;
-
-  Vector<double>       solution;
-  Vector<double>       system_rhs;
-  Vector<double>       stress_grad;
-  
-  Parameters::AllParameters prm_;
-};
 
 
 StokesSlipWrapper::StokesSlipWrapper(const std::string& input_file)
   :
   prm_(input_file),
-  stokes2d(nullptr)
+  stokes2d(nullptr),
+  stokes3d(nullptr)
 {
   switch (prm_.dim)
   {
   case 2:
     stokes2d = new StokesSlip<2>(input_file);
+    break;
+    
+  case 3:
+    stokes3d = new StokesSlip<3>(input_file);
     break;
     
   default:
@@ -162,12 +75,24 @@ StokesSlipWrapper::StokesSlipWrapper(const std::string& input_file)
 StokesSlipWrapper::~StokesSlipWrapper()
 {
   if (stokes2d != nullptr) delete stokes2d;
+  if (stokes3d != nullptr) delete stokes3d;
 }
 
 
 double StokesSlipWrapper::run(const alglib::real_1d_array& x)
 {
-  return stokes2d->run(x);
+  switch (prm_.dim)
+  {
+    case 2:
+      return stokes2d->run(x);
+      break;
+      
+    case 3:
+      return stokes3d->run(x);
+      break;
+  }
+  
+  return 0;
 }
 
 
@@ -182,7 +107,19 @@ StokesSlip<dim>::StokesSlip (const std::string &input_file)
   quad1d(QGauss<dim-1>(2)),
   quad1d_output(QGaussLobatto<dim-1>(2)),
   prm_(input_file)
-{}
+{
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  
+  switch (dim)
+  {
+    case 2:
+      variables = "x,y";
+      break;
+    case 3:
+      variables = "x,y,z";
+      break;
+  }
+}
 
 double bezier(const alglib::real_1d_array &a, double x)
 {
@@ -204,9 +141,11 @@ double bezier(const alglib::real_1d_array &a, double x)
 template<unsigned int dim>
 void StokesSlip<dim>::make_grid (const alglib::real_1d_array &x)
 {
-    std::cout << "x = ";
-    for (unsigned int i=0; i<prm_.np; ++i) std::cout << x[i] << " ";
-    std::cout << std::endl;
+    if (rank==0) {
+      std::cout << "x = ";
+      for (unsigned int i=0; i<prm_.np; ++i) std::cout << x[i] << " ";
+      std::cout << std::endl;
+    }
     
 	GridIn<dim> grid_in;
 	grid_in.attach_triangulation(triangulation);
@@ -214,12 +153,13 @@ void StokesSlip<dim>::make_grid (const alglib::real_1d_array &x)
 	std::ifstream input_file(prm_.mesh_file);
 	Assert (input_file, ExcFileNotOpen(prm_.mesh_file.c_str()));
 
-	std::cout << "* Read mesh file '" << prm_.mesh_file << "'"<< std::endl;
+	if (rank==0) std::cout << "* Read mesh file '" << prm_.mesh_file << "'"<< std::endl;
     triangulation.clear();
 	grid_in.read_msh(input_file);
     
-    double l = (prm_.p2-prm_.p1).norm();
-    Tensor<1,2> t=(prm_.p2-prm_.p1)/l, n({-t[1], t[0]});
+    double l1 = (prm_.p2-prm_.p1).norm(),
+           l2 = (prm_.ptop-prm_.p1).norm();
+    Tensor<1,3> t=(prm_.p2-prm_.p1)/l1, n=(prm_.ptop-prm_.p1)/l2;
 //     std::vector<double> X(prm_.np);
 //     for (unsigned int i=0; i<prm_.np; ++i)
 //       X[i] = double(i)/(prm_.np-1);
@@ -231,14 +171,18 @@ void StokesSlip<dim>::make_grid (const alglib::real_1d_array &x)
     std::vector<bool> moved(triangulation.n_vertices(), false);
     for (typename Triangulation<dim>::cell_iterator cell=triangulation.begin(); cell != triangulation.end(); ++cell)
     {
-        for (unsigned int vid=0; vid<4; ++vid)
+        for (unsigned int vid=0; vid<GeometryInfo<dim>::vertices_per_cell; ++vid)
         {
           if (!moved[cell->vertex_index(vid)])
           {
-            Point<2> p = cell->vertex(vid);
+            Point<3> p;
+            for (unsigned int i=0; i<dim; ++i) p(i) = cell->vertex(vid)(i);
             double pn = (p-prm_.p1)*n, pt = (p-prm_.p1)*t;
-            if (pn >= 0 & pn <= prm_.height & pt >= 0 & pt <= l)
-              cell->vertex(vid) += n*(1-(p-prm_.p1)*n/prm_.height)*bezier(x, (p-prm_.p1)*t/l);//alglib::spline1dcalc(spline,(p-prm_.p1)*t/l);
+            if (pn >= 0 & pn <= l2 & pt >= 0 & pt <= l1)
+            {
+              Point<3> increment = n*(1-(p-prm_.p1)*n/l2)*bezier(x, (p-prm_.p1)*t/l1);
+              for (unsigned int i=0; i<dim; ++i) cell->vertex(vid)(i) += increment(i);
+            }
             moved[cell->vertex_index(vid)] = true;
           }
         }
@@ -283,12 +227,14 @@ void StokesSlip<dim>::make_grid (const alglib::real_1d_array &x)
 		}
 	}
 */
-	std::cout << "Number of active cells: "
-		  << triangulation.n_active_cells()
-		  << std::endl;
-	std::cout << "Total number of cells: "
-		  << triangulation.n_cells()
-		  << std::endl;
+	if (rank==0) {
+	  std::cout << "Number of active cells: "
+	  	    << triangulation.n_active_cells()
+		    << std::endl;
+	  std::cout << "Total number of cells: "
+		    << triangulation.n_cells()
+		    << std::endl;
+	}
 }
 
 /*
@@ -306,9 +252,10 @@ template<unsigned int dim>
 void StokesSlip<dim>::setup_system ()
 {
 	dof_handler.distribute_dofs (fe);
-	std::cout << "Number of degrees of freedom: "
-		  << dof_handler.n_dofs()
-		  << std::endl;
+	if (rank==0)
+	  std::cout << "Number of degrees of freedom: "
+		    << dof_handler.n_dofs()
+		    << std::endl;
 
 	CompressedSparsityPattern c_sparsity(dof_handler.n_dofs());
 	DoFTools::make_sparsity_pattern (dof_handler, c_sparsity);
@@ -335,7 +282,7 @@ void StokesSlip<dim>::assemble_system ()
 	FullMatrix<double>   cell_matrix (dofs_per_cell, dofs_per_cell);
 	Vector<double>       cell_rhs (dofs_per_cell);
 
-	std::vector<Vector<double> > rhs_values (n_q_points, Vector<double>(2));
+	std::vector<Vector<double> > rhs_values (n_q_points, Vector<double>(dim));
 
 	std::vector<types::global_dof_index> local_dof_indices (dofs_per_cell);
 
@@ -384,7 +331,6 @@ void StokesSlip<dim>::assemble_system ()
 										  - phi_p[i] * div_phi_u[j]
 										)
 										* fe_values.JxW(q);
-
 				}
 			}
 		}
@@ -392,14 +338,15 @@ void StokesSlip<dim>::assemble_system ()
 		// Assembling the right hand side due to volume force
         if (prm_.force.find(cell->material_id()) != prm_.force.end())
         {
-            FunctionParser<2> fp(2);
-            fp.initialize("x,y", prm_.force[cell->material_id()], {});
+            FunctionParser<dim> fp(dim);
+            fp.initialize(variables, prm_.force[cell->material_id()], {});
             fp.vector_value_list (fe_values.get_quadrature_points(), rhs_values);
             for (unsigned int q_point=0; q_point<n_q_points; ++q_point)
             {
               for (unsigned int i=0; i<dofs_per_cell; ++i)
               {
-                Tensor<1,2> rhs({rhs_values[q_point][0], rhs_values[q_point][1]});
+                Tensor<1,dim> rhs;
+                for (unsigned int i=0; i<dim; ++i) rhs[i] = rhs_values[q_point][i];
                 cell_rhs(i) += fe_values[velocities].value(i,q_point) *
                     rhs *
                     fe_values.JxW(q_point);
@@ -407,7 +354,7 @@ void StokesSlip<dim>::assemble_system ()
             }
         }
 		
-		for (unsigned int face = 0; face < 4; ++face)
+		for (unsigned int face = 0; face < GeometryInfo<dim>::faces_per_cell; ++face)
         {
           if (cell->at_boundary(face))
           {
@@ -416,13 +363,13 @@ void StokesSlip<dim>::assemble_system ()
             {
               fe_face_values.reinit(cell, face);
               std::vector<Vector<double> > bc_values(quad1d.size(), Vector<double>(1));
-              FunctionParser<2> fp(1);
-              fp.initialize("x,y", prm_.velocity_normal[cell->face(face)->boundary_indicator()], {});
+              FunctionParser<dim> fp(1);
+              fp.initialize(variables, prm_.velocity_normal[cell->face(face)->boundary_indicator()], {});
               fp.vector_value_list (fe_face_values.get_quadrature_points(), bc_values);
 
               for (unsigned int q_point=0; q_point<quad1d.size(); q_point++)
               {
-                Tensor<1,2> normal = fe_face_values.normal_vector(q_point);
+                Tensor<1,dim> normal = fe_face_values.normal_vector(q_point);
                 
                 for (unsigned int i=0; i<dofs_per_cell; i++)
                 {
@@ -446,7 +393,7 @@ void StokesSlip<dim>::assemble_system ()
 
               for (unsigned int q_point=0; q_point<quad1d.size(); q_point++)
               {
-                Tensor<1,2> normal = fe_face_values.normal_vector(q_point);
+                Tensor<1,dim> normal = fe_face_values.normal_vector(q_point);
                 
                 for (unsigned int i=0; i<dofs_per_cell; i++)
                 {
@@ -462,15 +409,16 @@ void StokesSlip<dim>::assemble_system ()
             else if (prm_.velocity_tangent.find(cell->face(face)->boundary_indicator()) != prm_.velocity_tangent.end())
             {
               fe_face_values.reinit(cell, face);
-              std::vector<Vector<double> > bc_values(quad1d.size(), Vector<double>(2));
-              FunctionParser<2> fp(2);
-              fp.initialize("x,y", prm_.velocity_tangent[cell->face(face)->boundary_indicator()], {});
+              std::vector<Vector<double> > bc_values(quad1d.size(), Vector<double>(dim));
+              FunctionParser<dim> fp(dim);
+              fp.initialize(variables, prm_.velocity_tangent[cell->face(face)->boundary_indicator()], {});
               fp.vector_value_list (fe_face_values.get_quadrature_points(), bc_values);
 
               for (unsigned int q_point=0; q_point<quad1d.size(); q_point++)
               {
-                Tensor<1,2> normal = fe_face_values.normal_vector(q_point);
-                Tensor<1,2> bc_tangent({ bc_values[q_point][0], bc_values[q_point][1] });
+                Tensor<1,dim> normal = fe_face_values.normal_vector(q_point);
+                Tensor<1,dim> bc_tangent;
+                for (unsigned int i=0; i<dim; ++i) bc_tangent[i] = bc_values[q_point][i];
                 bc_tangent -= (bc_tangent*normal)*normal;
                 
                 for (unsigned int i=0; i<dofs_per_cell; i++)
@@ -492,14 +440,15 @@ void StokesSlip<dim>::assemble_system ()
             else if (prm_.velocity.find(cell->face(face)->boundary_indicator()) != prm_.velocity.end())
             {
               fe_face_values.reinit(cell, face);
-              std::vector<Vector<double> > bc_values(quad1d.size(), Vector<double>(2));
-              FunctionParser<2> fp(2);
-              fp.initialize("x,y", prm_.velocity[cell->face(face)->boundary_indicator()], {});
+              std::vector<Vector<double> > bc_values(quad1d.size(), Vector<double>(dim));
+              FunctionParser<dim> fp(dim);
+              fp.initialize(variables, prm_.velocity[cell->face(face)->boundary_indicator()], {});
               fp.vector_value_list (fe_face_values.get_quadrature_points(), bc_values);
 
               for (unsigned int q_point=0; q_point<quad1d.size(); q_point++)
               {
-                Tensor<1,2> bc_value({bc_values[q_point][0],bc_values[q_point][1]});
+                Tensor<1,dim> bc_value;
+                for (unsigned int i=0; i<dim; ++i) bc_value[i] = bc_values[q_point][i];
                 
                 for (unsigned int i=0; i<dofs_per_cell; i++)
                 {
@@ -513,17 +462,18 @@ void StokesSlip<dim>::assemble_system ()
               }
             }
             // prescribe traction
-            if (prm_.traction.find(cell->face(face)->boundary_indicator()) != prm_.traction.end())
+            else if (prm_.traction.find(cell->face(face)->boundary_indicator()) != prm_.traction.end())
             {
               fe_face_values.reinit(cell, face);
-              std::vector<Vector<double> > bc_values(quad1d.size(), Vector<double>(2));
-              FunctionParser<2> fp(2);
-              fp.initialize("x,y", prm_.traction[cell->face(face)->boundary_indicator()], {});
+              std::vector<Vector<double> > bc_values(quad1d.size(), Vector<double>(dim));
+              FunctionParser<dim> fp(dim);
+              fp.initialize(variables, prm_.traction[cell->face(face)->boundary_indicator()], {});
               fp.vector_value_list (fe_face_values.get_quadrature_points(), bc_values);
 
               for (unsigned int q_point=0; q_point<quad1d.size(); q_point++)
               {
-                Tensor<1,2> traction({bc_values[q_point][0], bc_values[q_point][1]});
+                Tensor<1,dim> traction;
+                for (unsigned int i=0; i<dim; ++i) traction[i] = bc_values[q_point][i];
                 
                 for (unsigned int i=0; i<dofs_per_cell; i++)
                 {
@@ -544,7 +494,7 @@ void StokesSlip<dim>::assemble_system ()
 template<unsigned int dim>
 void StokesSlip<dim>::assemble_stress_rhs ()
 {
-	FEFaceValues<2> fe_face_values(fe, quad1d, update_values | update_JxW_values | update_normal_vectors | update_quadrature_points);
+	FEFaceValues<dim> fe_face_values(fe, quad1d, update_values | update_JxW_values | update_normal_vectors | update_quadrature_points);
 	
 	const unsigned int   dofs_per_cell = fe.dofs_per_cell;
 
@@ -558,7 +508,7 @@ void StokesSlip<dim>::assemble_stress_rhs ()
 	stress_grad = 0;
     stress_hess = 0;
 
-	DoFHandler<2>::active_cell_iterator
+	typename DoFHandler<dim>::active_cell_iterator
 	cell = dof_handler.begin_active(),
 	endc = dof_handler.end();
 	for (; cell!=endc; ++cell)
@@ -568,36 +518,38 @@ void StokesSlip<dim>::assemble_stress_rhs ()
         
         cell->get_dof_indices (local_dof_indices);
 		
-		for (unsigned int face = 0; face < 4; ++face)
+		for (unsigned int face = 0; face < GeometryInfo<dim>::faces_per_cell; ++face)
 		{
 			if (cell->at_boundary(face) && prm_.velocity_slip.find(cell->face(face)->boundary_indicator()) != prm_.velocity_slip.end())
 			{
 				fe_face_values.reinit(cell, face);
                 std::vector<Vector<double> > slip_values(quad1d.size(), Vector<double>(2));
-                FunctionParser<2> fp(2);
-                fp.initialize("x,y", prm_.velocity_slip[cell->face(face)->boundary_indicator()], {});
+                FunctionParser<dim> fp(2);
+                fp.initialize(variables, prm_.velocity_slip[cell->face(face)->boundary_indicator()], {});
                 fp.vector_value_list (fe_face_values.get_quadrature_points(), slip_values);
 
 				for (unsigned int q_point=0; q_point<quad1d.size(); q_point++)
 				{
-                    Tensor<1,2> u({0, 0});
+                    Tensor<1,dim> u;
                     for (unsigned int i=0; i<dofs_per_cell; i++)
                       u += solution[local_dof_indices[i]]*fe_face_values[velocities].value(i,q_point);
                     
-                    Tensor<1,2> normal = fe_face_values.normal_vector(q_point);
-                    Tensor<1,2> tangent({-normal[1], normal[0]});
-                    double u_tau = u*tangent;
+                    Tensor<1,dim> normal = fe_face_values.normal_vector(q_point);
+//                     Tensor<1,dim> tangent({-normal[1], normal[0]});
+                    Tensor<1,dim> u_tau = u-(u*normal)*normal;
+                    double u_tau_norm = u_tau.norm();
 					
 					for (unsigned int i=0; i<dofs_per_cell; i++)
 					{
-						cell_grad(i) += (fe_face_values[velocities].value(i,q_point) * tangent) *
-							phi_grad(u_tau, slip_values[q_point][0], slip_values[q_point][1]) *
+						cell_grad(i) += (fe_face_values[velocities].value(i,q_point)-(fe_face_values[velocities].value(i,q_point)*normal)*normal) *
+						    u_tau/(u_tau_norm==0?1:u_tau_norm) *
+							phi_grad(u_tau_norm, slip_values[q_point][0], slip_values[q_point][1]) *
 							fe_face_values.JxW(q_point);
                         
                         for (unsigned int j=0; j<dofs_per_cell; j++)
-                            cell_hess(i,j) += (fe_face_values[velocities].value(i,q_point)*tangent) *
-                                (fe_face_values[velocities].value(j,q_point)*tangent) *
-                                phi_hess(u_tau, slip_values[q_point][0], slip_values[q_point][1]) *
+                            cell_hess(i,j) += (fe_face_values[velocities].value(i,q_point)-(fe_face_values[velocities].value(i,q_point)*normal)*normal) *
+                                (fe_face_values[velocities].value(j,q_point)-(fe_face_values[velocities].value(j,q_point)*normal)*normal) *
+                                phi_hess(u_tau_norm, slip_values[q_point][0], slip_values[q_point][1]) *
                                 fe_face_values.JxW(q_point);
 					}
 				}
@@ -613,21 +565,25 @@ void StokesSlip<dim>::assemble_stress_rhs ()
 template<unsigned int dim>
 void StokesSlip<dim>::output_shear_stress() const
 {
-  FEFaceValues<2> fe_face_values(fe, quad1d_output, update_values | update_gradients | update_normal_vectors | update_quadrature_points);
+  FEFaceValues<dim> fe_face_values(fe, quad1d_output, update_values | update_gradients | update_normal_vectors | update_quadrature_points);
   const FEValuesExtractors::Vector velocities (0);
   std::vector<types::global_dof_index> local_dof_indices (fe.dofs_per_cell);
-  double shear_stress;
-  double slip_velocity;
+  Tensor<1,dim> shear_stress;
+  Tensor<1,dim> slip_velocity;
 
-  std::ofstream f(prm_.output_file_base + ".dat");
+  std::ostringstream fname;
+  fname << prm_.output_file_base;
+  if (rank!=0) fname << "." << rank;
+  fname << ".dat";
+  std::ofstream f(fname.str());
   f << "# X Y Shear_stress U_tau" << std::endl;
   
-  DoFHandler<2>::active_cell_iterator
+  typename DoFHandler<dim>::active_cell_iterator
   cell = dof_handler.begin_active(),
   endc = dof_handler.end();
   for (; cell!=endc; ++cell)
   {
-    for (unsigned int face = 0; face < 4; ++face)
+    for (unsigned int face = 0; face < GeometryInfo<dim>::faces_per_cell; ++face)
     {
       if (cell->at_boundary(face) && prm_.velocity_slip.find(cell->face(face)->boundary_indicator()) != prm_.velocity_slip.end())
       {
@@ -638,18 +594,18 @@ void StokesSlip<dim>::output_shear_stress() const
         {
           shear_stress = 0;
           slip_velocity = 0;
-          Tensor<1,2> normal = fe_face_values.normal_vector(q_point);
-          Tensor<1,2> tangent({-normal[1], normal[0]});
+          Tensor<1,dim> normal = fe_face_values.normal_vector(q_point);
+//           Tensor<1,2> tangent({-normal[1], normal[0]});
           
           for (unsigned int i=0; i<fe.dofs_per_cell; i++)
           {
-            Tensor<1,2> Dphi_n;
+            Tensor<1,dim> Dphi_n;
             if (prm_.sym_grad)
               Dphi_n = fe_face_values[velocities].symmetric_gradient(i,q_point)*2*normal;
             else
               Dphi_n = fe_face_values[velocities].gradient(i,q_point)*normal;
-            shear_stress += solution[local_dof_indices[i]]*(Dphi_n*tangent);
-            slip_velocity += solution[local_dof_indices[i]]*fe_face_values[velocities].value(i,q_point)*tangent;
+            shear_stress += solution[local_dof_indices[i]]*(Dphi_n-(Dphi_n*normal)*normal);
+            slip_velocity += solution[local_dof_indices[i]]*(fe_face_values[velocities].value(i,q_point)-(fe_face_values[velocities].value(i,q_point)*normal)*normal);
           }
           f << fe_face_values.quadrature_point(q_point) << " " << shear_stress << " " << slip_velocity << std::endl;
         }
@@ -662,16 +618,17 @@ void StokesSlip<dim>::output_shear_stress() const
 template<unsigned int dim>
 double StokesSlip<dim>::output_cost_function()
 {
-  FEValues<2> fe_values (fe, quadrature_formula,
+  FEValues<dim> fe_values (fe, quadrature_formula,
             update_values | update_gradients | update_JxW_values | update_quadrature_points);
-  FEFaceValues<2> fe_face_values(fe, quad1d_output, update_values | update_gradients | update_normal_vectors | update_quadrature_points | update_JxW_values);
+  FEFaceValues<dim> fe_face_values(fe, quad1d_output, update_values | update_gradients | update_normal_vectors | update_quadrature_points | update_JxW_values);
   const FEValuesExtractors::Vector velocities (0);
-  const FEValuesExtractors::Scalar pressure (2);
+  const FEValuesExtractors::Scalar pressure (dim);
   std::vector<types::global_dof_index> local_dof_indices (fe.dofs_per_cell);
-  double st, sn, ut, un;
+  double st, sn, un;
+  Tensor<1,dim> ut;
   double cost = 0;
 
-  DoFHandler<2>::active_cell_iterator
+  typename DoFHandler<dim>::active_cell_iterator
   cell = dof_handler.begin_active(),
   endc = dof_handler.end();
   for (; cell!=endc; ++cell)
@@ -694,15 +651,15 @@ double StokesSlip<dim>::output_cost_function()
           dxux += solution[local_dof_indices[i]]*fe_values[velocities].gradient(i,q_point)[0][0];
         }
 
-        FunctionParser<2> fp(1);
-        fp.initialize("x,y", prm_.volume_integral[cell->material_id()], {{"ux",ux}, {"uy",uy}, {"p",pr}, {"dxux",dxux}});
+        FunctionParser<dim> fp(1);
+        fp.initialize(variables, prm_.volume_integral[cell->material_id()], {{"ux",ux}, {"uy",uy}, {"p",pr}, {"dxux",dxux}});
         
-        Point<2> p({fe_values.quadrature_point(q_point)[0], fe_values.quadrature_point(q_point)[1]});
-        cost += fp.value(p)*fe_values.JxW(q_point);
+//         Point<2> p({fe_values.quadrature_point(q_point)[0], fe_values.quadrature_point(q_point)[1]});
+        cost += fp.value(fe_values.quadrature_point(q_point))*fe_values.JxW(q_point);
       }
     }
     
-    for (unsigned int face = 0; face < 4; ++face)
+    for (unsigned int face = 0; face < GeometryInfo<dim>::faces_per_cell; ++face)
     {
       if (cell->at_boundary(face) && prm_.boundary_integral.find(cell->face(face)->boundary_indicator()) != prm_.boundary_integral.end())
       {
@@ -710,34 +667,37 @@ double StokesSlip<dim>::output_cost_function()
         
         for (unsigned int q_point=0; q_point<quad1d_output.size(); q_point++)
         {
-          st = sn = ut = un = 0;
-          Tensor<1,2> normal = fe_face_values.normal_vector(q_point);
-          Tensor<1,2> tangent({-normal[1], normal[0]});
+          st = sn = un = 0;
+          ut = 0;
+          Tensor<1,dim> normal = fe_face_values.normal_vector(q_point);
+//           Tensor<1,dim> tangent({-normal[1], normal[0]});
+          Tensor<1,dim> sigma_t;
           
           for (unsigned int i=0; i<fe.dofs_per_cell; i++)
           {
-            Tensor<1,2> Dphi_n;
+            Tensor<1,dim> Dphi_n;
             if (prm_.sym_grad)
               Dphi_n = fe_face_values[velocities].symmetric_gradient(i,q_point)*2*normal;
             else
               Dphi_n = fe_face_values[velocities].gradient(i,q_point)*normal;
-            st += solution[local_dof_indices[i]]*(Dphi_n*tangent);
+            sigma_t += solution[local_dof_indices[i]]*(Dphi_n-(Dphi_n*normal)*normal);
             sn += solution[local_dof_indices[i]]*(Dphi_n*normal);
-            ut += solution[local_dof_indices[i]]*fe_face_values[velocities].value(i,q_point)*tangent;
+            ut += solution[local_dof_indices[i]]*(fe_face_values[velocities].value(i,q_point)-(fe_face_values[velocities].value(i,q_point)*normal)*normal);
             un += solution[local_dof_indices[i]]*fe_face_values[velocities].value(i,q_point)*normal;
           }
+          st = sigma_t*ut/(ut.norm()==0?1:ut.norm());
           
-          FunctionParser<2> fp(1);
-          fp.initialize("x,y", prm_.boundary_integral[cell->face(face)->boundary_indicator()], {{"ut",ut}, {"un",un}, {"st",st}, {"sn",sn}});
+          FunctionParser<dim> fp(1);
+          fp.initialize(variables, prm_.boundary_integral[cell->face(face)->boundary_indicator()], {{"ut",ut.norm()}, {"un",un}, {"st",st}, {"sn",sn}});
           
-          Point<2> p({fe_face_values.quadrature_point(q_point)[0], fe_face_values.quadrature_point(q_point)[1]});
-          cost += fp.value(p)*fe_face_values.JxW(q_point);
+//           Point<2> p({fe_face_values.quadrature_point(q_point)[0], fe_face_values.quadrature_point(q_point)[1]});
+          cost += fp.value(fe_face_values.quadrature_point(q_point))*fe_face_values.JxW(q_point);
         }
       }
     }
   }
   
-  std::cout << "Cost function = " << cost << std::endl;
+  if (rank==0) std::cout << "Cost function = " << cost << std::endl;
   return cost;
 }
 
@@ -746,21 +706,25 @@ double StokesSlip<dim>::output_cost_function()
 template<unsigned int dim>
 void StokesSlip<dim>::output_vtk () const
 {
-	std::vector<std::string> solution_names (2, "velocity");
+	std::vector<std::string> solution_names (dim, "velocity");
 	solution_names.push_back ("pressure");
 
 	std::vector<DataComponentInterpretation::DataComponentInterpretation>
-	data_component_interpretation(2, DataComponentInterpretation::component_is_part_of_vector);
+	data_component_interpretation(dim, DataComponentInterpretation::component_is_part_of_vector);
 	data_component_interpretation.push_back(DataComponentInterpretation::component_is_scalar);
 
-	DataOut<2> data_out;
+	DataOut<dim> data_out;
 	data_out.attach_dof_handler(dof_handler);
 	data_out.add_data_vector (solution, solution_names,
-				  DataOut<2>::type_dof_data,
+				  DataOut<dim>::type_dof_data,
 				  data_component_interpretation);
 	data_out.build_patches ();
 
-	std::ofstream output (prm_.output_file_base + ".vtk");
+        std::ostringstream fname;
+        fname << prm_.output_file_base;
+        if (rank != 0) fname << "." << rank;
+        fname << ".vtk";
+	std::ofstream output (fname.str());
 	data_out.write_vtk (output);
 }
 
@@ -799,20 +763,22 @@ double StokesSlip<dim>::run (const alglib::real_1d_array &x)
   assemble_system();
   double system_rhs_norm = system_rhs.l2_norm();
   
-  printf("\nIter Abs_residual Rel_residual\n");
+  if (rank==0) printf("\nIter Abs_residual Rel_residual\n");
   do
   {
     assemble_stress_rhs();
     delta = solve ();
     iter++;
-    printf("%4d %12g %12g\n", iter, delta, delta/system_rhs_norm);
+    if (rank==0) printf("%4d %12g %12g\n", iter, delta, delta/system_rhs_norm);
   } while (delta > std::max(prm_.a_tol, prm_.r_tol*system_rhs_norm) && iter < prm_.max_iter);
   
-  printf("\n");
+  if (rank==0) {
+    printf("\n");
   
-  if (delta <= prm_.a_tol) printf("Absolute tolerance reached.\n");
-  if (delta <= prm_.r_tol*system_rhs_norm) printf("Relative tolerance reached.\n");
-  if (iter  >= prm_.max_iter) printf("Maximal number of iterations reached.\n");
+    if (delta <= prm_.a_tol) printf("Absolute tolerance reached.\n");
+    if (delta <= prm_.r_tol*system_rhs_norm) printf("Relative tolerance reached.\n");
+    if (iter  >= prm_.max_iter) printf("Maximal number of iterations reached.\n");
+  }
   
   output_vtk ();
   output_shear_stress();
@@ -820,119 +786,3 @@ double StokesSlip<dim>::run (const alglib::real_1d_array &x)
 }
 
 
-StokesSlipWrapper *stokes_problem;
-
-void myfunc(const alglib::real_1d_array &x, double &fi, void *ptr)
-{
-  fi = stokes_problem->run(x);
-}
-
-void report(const alglib::real_1d_array &x, double fval, void *ptr)
-{
-  static int iter = 0;
-  static std::ofstream f(stokes_problem->prm().logfile.c_str());
-  
-  if (iter == 0)
-    f << "iter fval x\n-------------\n";
-  
-  printf("\n----------------------------\n");
-  printf("iter  fval\n");
-  printf("%5d %g\n", ++iter, fval);
-  printf("----------------------------\n\n");
-
-  f << iter << " " << fval << " ";
-  for (unsigned int i=0; i<x.length(); ++i)
-    f << x[i] << " ";
-  f << std::endl;
-}
-
-
-int main (int argc, char **argv)
-{
-  if (argc == 2)
-  {
-	stokes_problem = new StokesSlipWrapper(argv[1]);
-    const unsigned int np = stokes_problem->prm().np;
-// 	stokes_problem.run ();
-    
-    alglib::real_1d_array x;
-    double epsg = 1e-6;
-    double epsf = 0;
-    double epsx = 0;
-    alglib::ae_int_t maxits = stokes_problem->prm().maxit;
-    alglib::minbleicstate state;
-    alglib::minbleicreport rep;
-    x.setlength(np);
-    
-    // setup bound constraints
-    alglib::real_1d_array lb, ub;
-    lb.setlength(x.length());
-    ub.setlength(x.length());
-    FunctionParser<1> fpl(1), fpu(1);
-    fpu.initialize("x", stokes_problem->prm().f_max, {});
-    fpl.initialize("x", stokes_problem->prm().f_min, {});
-    for (unsigned int i=0; i<np; i++)
-    {
-      if (stokes_problem->prm().init_guess.size() == x.length()) x[i] = stokes_problem->prm().init_guess[i];
-      Point<1> p(double(i)/(np-1));
-      lb[i] = fpl.value(p);
-      ub[i] = fpu.value(p);
-      printf("lb[%d] = %f ub[%d] = %f\n", i, lb[i], i, ub[i]);
-    }
-    
-    if (maxits > 0)
-    {
-      // setup linear constraints
-      alglib::real_2d_array c;
-      alglib::integer_1d_array ct;
-      c.setlength(4*np-2,np+1);
-      ct.setlength(4*np-2);
-      // 1st order difference constraints
-      for (unsigned int i=0; i<np; ++i)
-      {
-        c(2*i,i+1)= 1;
-        c(2*i,i)  =-1;
-        c(2*i,np) = stokes_problem->prm().g_max/(np-1);
-        ct(2*i) = -1;
-        c(2*i+1,i+1)= 1;
-        c(2*i+1,i)  =-1;
-        c(2*i+1,np) = -stokes_problem->prm().g_max/(np-1);
-        ct(2*i+1) = 1;
-      }
-      // 2nd difference constraints
-      for (unsigned int i=1; i<np; ++i)
-      {
-        c(2*(np+i-1),i+1) =  1;
-        c(2*(np+i-1),i)   = -2;
-        c(2*(np+i-1),i-1) = 1;
-        c(2*(np+i-1),np)  = stokes_problem->prm().h_max/((np-1)*(np-1));
-        ct(2*(np+i-1)) = -1;
-        c(2*(np+i)-1,i+1) =  1;
-        c(2*(np+i)-1,i)   = -2;
-        c(2*(np+i)-1,i-1) = 1;
-        c(2*(np+i)-1,np)  = -stokes_problem->prm().h_max/((np-1)*(np-1));
-        ct(2*(np+i)-1) = 1;
-      }
-      
-      alglib::minbleiccreatef(x.length(), x, 0.0001, state);
-      alglib::minbleicsetbc(state, lb, ub);
-      alglib::minbleicsetlc(state, c, ct);
-      alglib::minbleicsetcond(state, epsg, epsf, epsx, maxits);
-      alglib::minbleicsetxrep(state, true);
-      alglib::minbleicoptimize(state, &myfunc, report);
-      alglib::minbleicresults(state, x, rep);
-
-      printf("Optimization return code: %d\n", int(rep.terminationtype));
-    }
-    
-    stokes_problem->run(x);
-    
-    delete stokes_problem;
-  }
-  else
-  {
-    std::cout << "Usage:\n\n  " << argv[0] << " parameter_file.prm\n\nSyntax of parameter_file.prm:\n\n";
-  }
-
-  return 0;
-}

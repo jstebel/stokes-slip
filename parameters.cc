@@ -183,7 +183,8 @@ void ShapeOptimization::declare_parameters(ParameterHandler &prm)
     prm.enter_subsection("ShapeOptimization");
         prm.declare_entry("Left point",  "0;0;0", Patterns::Anything());
         prm.declare_entry("Right point", "1;0;0", Patterns::Anything());
-        prm.declare_entry("Box height",  "1", Patterns::Double());
+        prm.declare_entry("Top point", "0;1;0", Patterns::Anything());
+//         prm.declare_entry("Box height",  "1", Patterns::Double());
         prm.declare_entry("N_control_pts", "8", Patterns::Integer());
         prm.declare_entry("Max_it", "0", Patterns::Integer());
         prm.declare_entry("Initial shape", "", Patterns::List(Patterns::Double()), "Initial control points of bezier curve describing shape.");
@@ -199,10 +200,11 @@ void ShapeOptimization::parse_parameters(ParameterHandler &prm)
 {
     prm.enter_subsection("ShapeOptimization");
         std::vector<std::string> pstr = split_string(prm.get("Left point"), ";");
-        p1 = { atof(pstr[0].c_str()), atof(pstr[1].c_str()) };
+        p1 = { atof(pstr[0].c_str()), atof(pstr[1].c_str()), atof(pstr[2].c_str()) };
         pstr = split_string(prm.get("Right point"), ";");
-        p2 = { atof(pstr[0].c_str()), atof(pstr[1].c_str()) };
-        height = prm.get_double("Box height");
+        p2 = { atof(pstr[0].c_str()), atof(pstr[1].c_str()), atof(pstr[2].c_str()) };
+        pstr = split_string(prm.get("Top point"), ";");
+        ptop = { atof(pstr[0].c_str()), atof(pstr[1].c_str()), atof(pstr[2].c_str()) };
         np = prm.get_integer("N_control_pts");
         maxit = prm.get_integer("Max_it");
         std::vector<std::string> init_str = split_string(prm.get("Initial shape"), ",");

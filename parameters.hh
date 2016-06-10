@@ -70,8 +70,9 @@ namespace Parameters {
     };
     
     struct ShapeOptimization {
-      Point<2> p1;
-      Point<2> p2;
+      Point<3> p1;
+      Point<3> p2;
+      Point<3> ptop;
       double height;
       unsigned int np;
       unsigned int maxit;
