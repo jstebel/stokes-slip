@@ -26,7 +26,7 @@ void myfunc_grad(const alglib::real_1d_array &x, double &fi, alglib::real_1d_arr
     double buf[x.length()];
     for (int j=0; j<x.length(); j++)  buf[j] = x[j];
     buf[i] += d;
-    MPI_Send(&buf, x.length(), MPI_DOUBLE, i%(np-1)+1, 0, MPI_COMM_WORLD);
+    MPI_Send(&buf, x.length(), MPI_DOUBLE, (np==1)?0:(i%(np-1)+1), 0, MPI_COMM_WORLD);
   }
   
   fi = stokes_problem->run(x);
@@ -35,7 +35,7 @@ void myfunc_grad(const alglib::real_1d_array &x, double &fi, alglib::real_1d_arr
   {
     double fd;
     MPI_Status status;
-    MPI_Recv(&fd, 1, MPI_DOUBLE, i%(np-1)+1, 0, MPI_COMM_WORLD, &status);
+    MPI_Recv(&fd, 1, MPI_DOUBLE, (np==1)?0:(i%(np-1)+1), 0, MPI_COMM_WORLD, &status);
     grad[i] = (fd-fi)/d;
   }
 }
