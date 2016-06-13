@@ -641,7 +641,7 @@ double StokesSlip<dim>::output_cost_function()
       
       for (unsigned int q_point=0; q_point<quadrature_formula.size(); q_point++)
       {
-        double ux = 0, uy = 0, pr = 0, dxux = 0;
+        double ux = 0, uy = 0, pr = 0, dxux = 0, dxuy = 0, dyux = 0, dyuy = 0;
         
         for (unsigned int i=0; i<fe.dofs_per_cell; i++)
         {
@@ -649,10 +649,13 @@ double StokesSlip<dim>::output_cost_function()
           uy += solution[local_dof_indices[i]]*fe_values[velocities].value(i,q_point)[1];
           pr  += solution[local_dof_indices[i]]*fe_values[pressure].value(i,q_point);
           dxux += solution[local_dof_indices[i]]*fe_values[velocities].gradient(i,q_point)[0][0];
+          dxuy += solution[local_dof_indices[i]]*fe_values[velocities].gradient(i,q_point)[0][1];
+          dyux += solution[local_dof_indices[i]]*fe_values[velocities].gradient(i,q_point)[1][0];
+          dyuy += solution[local_dof_indices[i]]*fe_values[velocities].gradient(i,q_point)[1][1];
         }
 
         FunctionParser<dim> fp(1);
-        fp.initialize(variables, prm_.volume_integral[cell->material_id()], {{"ux",ux}, {"uy",uy}, {"p",pr}, {"dxux",dxux}});
+        fp.initialize(variables, prm_.volume_integral[cell->material_id()], {{"ux",ux}, {"uy",uy}, {"p",pr}, {"dxux",dxux}, {"dxuy",dxuy}, {"dyux",dyux}, {"dyuy",dyuy}});
         
 //         Point<2> p({fe_values.quadrature_point(q_point)[0], fe_values.quadrature_point(q_point)[1]});
         cost += fp.value(fe_values.quadrature_point(q_point))*fe_values.JxW(q_point);
