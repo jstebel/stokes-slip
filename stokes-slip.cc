@@ -180,8 +180,8 @@ void StokesSlip<dim>::make_grid (const alglib::real_1d_array &x)
             double pn = (p-prm_.p1)*n, pt = (p-prm_.p1)*t;
             if (pn >= 0 & pn <= l2 & pt >= 0 & pt <= l1)
             {
-              Point<3> increment = n*(1-(p-prm_.p1)*n/l2)*bezier(x, (p-prm_.p1)*t/l1);
-              for (unsigned int i=0; i<dim; ++i) cell->vertex(vid)(i) += increment(i);
+              Tensor<1,3> increment = n*(1-(p-prm_.p1)*n/l2)*bezier(x, (p-prm_.p1)*t/l1);
+              for (unsigned int i=0; i<dim; ++i) cell->vertex(vid)(i) += increment[i];
             }
             moved[cell->vertex_index(vid)] = true;
           }
